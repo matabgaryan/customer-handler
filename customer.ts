@@ -31,23 +31,16 @@ class CustomerId {
   public constructor(public readonly id: string) {}
 }
 
-class RepositoryDelegateTransaction {
-    transact(arg0: any[][]) {
-        throw new Error("Method not implemented.");
-    }
-}
-
 export class CreateOrUpdateCustomerHandler {
   public constructor(
     private readonly contentCreatorRepository: ContentCreatorRepository,
     private readonly customerRepository: CustomerRepository,
-    private readonly transactionRepository: RepositoryDelegateTransaction,
   ) {
   }
-  
+
   public async invoke(event: any): Promise<IOutput> {
     const input = CreateOrUpdateCustomerHandler.extractInput(event);
-    
+
     let customer = await this.customerRepository.get(input.customerId); // just get customer
     let contentCreator = await this.contentCreatorRepository.getByCustomer(input.customerId);
     /**
@@ -55,61 +48,43 @@ export class CreateOrUpdateCustomerHandler {
      * repository.create(object); inside createCustomer function
      * I choose this solution because I think transaction will be executed as unit
      */
-    const operations = []
-    let instances = []
     // check if there is no customer create Customer operation and push it in operations array
-    if(!customer.isPresent()) operations.push(this.createCustomerOperation(customer));
+    if(!customer.isPresent()) customer = await this.createCustomer(customer);
     // check if there is no content creator create ContentCreator operation and push it in operations array
-    if(!contentCreator.isPresent()) operations.push(this.createContentCreatorOperation(customer));
-    // Execute transaction operations for creating customer and creator, or just one of them or nothing
-    if(operations.length !== 0) await this.transactionRepository.transact([operations]);
-    
-    // here is a little bit tricky we can map on transact returning data and assign customer and creator variables after
-    // using instanceOf function inside map
-    // something like this
-    // operationInstances.map((instance) => {
-    //    if(instance instanceOf Customer) customer = instance
-    //    if(instance instanceOf Creator) creator = instance
-    // })
-    //
-    // but because I don't have actual classes here I am skipping that part and
-    // just calling repository for getting new data.
-    customer =  await this.customerRepository.get(input.customerId);
-    contentCreator =  await this.contentCreatorRepository.getByCustomer(input.customerId);
+    if(!contentCreator.isPresent()) contentCreator = await this.createContentCreator(customer);
+
     CreateOrUpdateCustomerHandler.validateExistingCustomer(customer);
-  
+
     return {
       creatorId: contentCreator.creatorId.id,
       customerId: input.customerId.id,
     }
   }
-  
-  // We can just call this.contentCreatorRepository.create(contentCreator) function which will save and return data, but
-  // currently changing it for using transaction like executing it as one unit
-  private createContentCreatorOperation(customer: ICustomer): IContentCreator {
+
+  private createContentCreator(customer: ICustomer): IContentCreator {
     const contentCreator: IContentCreator = {
       auditFields: 'audit fields',
       creatorId: new CustomerId('uuid'),
       customerId: customer.customerId,
       name: customer.name,
     };
-    
-    return this.contentCreatorRepository.createOperation(contentCreator);
+
+    return this.contentCreatorRepository.create(contentCreator);
   }
-  
+
   // We can just call this.customerRepository.create(customer) function which will save and return data, but currently
   // changing it for using transaction like executing it as one unit
-  private async createCustomerOperation(input: any) {
+  private async createCustomer(input: any) {
     const customer: ICustomer = {
       auditFields: 'audit fields',
       customerId: input.customerId,
       name: input.customerName,
       status: Status.active,
     };
-    
-    return this.customerRepository.createOperation(customer)
+
+    return this.customerRepository.create(customer)
   }
-  
+
   private static extractInput(event: any): any {
     return {
       // There are a lot more attributes here that have been removed for simplification purposes
@@ -117,7 +92,7 @@ export class CreateOrUpdateCustomerHandler {
       customerName: event.customerName,
     };
   }
-  
+
   private static validateExistingCustomer(customer: ICustomer) {
     if (customer.status === Status.inactive) {
       throw new ValidationError(`Existing customer ${customer.customerId} is currently inactive`);
